@@ -1,0 +1,55 @@
+targets:
+  dart2js_archives:
+    dependencies:
+      - $default
+      - :worker
+    auto_apply_builders: false
+    builders:
+      build_web_compilers:dart2js_archive_extractor:
+        enabled: true
+
+  $default:
+    sources:
+      exclude:
+        # Jaspr browser tests must be run with dart test. build_web_compilers flags them 
+        # as having dart:io transitive imports.
+        - test/jaspr/**
+    builders:
+      build_web_compilers:dart2js_archive_extractor:
+        enabled: false
+      build_web_compilers:entrypoint:
+        generate_for:
+          exclude:
+            - lib/workers/workers.dart
+
+  worker:
+    sources:
+      exclude:
+        # Jaspr browser tests must be run with dart test. build_web_compilers flags them 
+        # as having dart:io transitive imports.
+        - test/jaspr/**
+    dependencies:
+      - $default
+    auto_apply_builders: false
+    builders:
+      build_web_compilers:dart2js_archive_extractor:
+        enabled: false
+      build_web_compilers:entrypoint:
+        enabled: true
+        generate_for:
+          - lib/workers/workers.dart
+        release_options:
+          compiler: dart2js
+          dart2js_args:
+            - -O2
+            - --define=dart.vm.product=true
+        dev_options:
+          compiler: dart2js
+          dart2js_args:
+            - -O4
+            - --enable-asserts
+      _embeddings_explorer_tool:worker_copy_builder:
+        enabled: true
+        generate_for:
+          - lib/workers/workers.dart.js
+          - lib/workers/workers.dart.js.map

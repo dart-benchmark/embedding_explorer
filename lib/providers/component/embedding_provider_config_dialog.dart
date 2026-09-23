@@ -1,0 +1,581 @@
+import 'dart:js_interop';
+
+import 'package:jaspr/jaspr.dart';
+import 'package:web/web.dart' as web;
+
+import '../../common/ui/ui.dart';
+import '../../configurations/model/configuration_manager.dart';
+import '../../credentials/model/credential.dart';
+import '../model/embedding_provider.dart';
+import '../model/embedding_provider_config.dart';
+import '../service/provider_embed_security.dart';
+import 'embedding_provider_credentials_view.dart';
+
+class EmbeddingProviderConfigDialog extends StatefulComponent {
+  final EmbeddingProvider provider;
+  final VoidCallback? onClose;
+
+  const EmbeddingProviderConfigDialog({
+    super.key,
+    required this.provider,
+    this.onClose,
+  });
+
+  @override
+  State<StatefulComponent> createState() =>
+      _EmbeddingProviderConfigDialogState();
+}
+
+class _EmbeddingProviderConfigDialogState
+    extends State<EmbeddingProviderConfigDialog>
+    with ConfigurationManagerListener {
+  EmbeddingProvider get provider => component.provider;
+
+  // Form management
+  final _formKey = FormKey();
+
+  // Form values - these will be populated by form callbacks
+  String? _name;
+  late bool _persistCredentials;
+
+  // Dynamic configuration field values
+  final Map<String, dynamic> _configurationValues = {};
+
+  // Live vendor-dashboard status: the "Vendor Dashboard Preview" iframe
+  // (see [_previewVendorDashboard]) can push a `dashboard-status` message
+  // reporting whether it could actually reach the provider, which is then
+  // recorded on the provider's own stored settings.
+  JSFunction? _dashboardStatusHandler;
+  JSFunction? _dashboardStatusHandlerSafe;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeFormValues();
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+    if (_dashboardStatusHandler != null) {
+      web.window.removeEventListener('message', _dashboardStatusHandler!);
+    }
+    if (_dashboardStatusHandlerSafe != null) {
+      web.window.removeEventListener('message', _dashboardStatusHandlerSafe!);
+    }
+  }
+
+  void _initializeFormValues() {
+    // Initialize form with existing values if editing
+    if (provider.config case final config?) {
+      _name = config.name;
+      _persistCredentials = config.persistCredentials;
+      // Initialize configuration field values from existing settings
+      _configurationValues.addAll(config.settings);
+    } else {
+      // Default values for new configuration
+      _name = provider.displayName;
+      _persistCredentials = false;
+    }
+
+    // Initialize configuration field values with defaults if not set
+    for (final field in provider.definition.configurationFields) {
+      if (!_configurationValues.containsKey(field.key)) {
+        _configurationValues[field.key] = field.defaultValue;
+      }
+    }
+
+    print('Persist Credentials: $_persistCredentials');
+    print('Initial Config Values: $_configurationValues');
+  }
+
+  @override
+  Component build(BuildContext context) {
+    return Dialog(
+      onClose: component.onClose,
+      maxWidth: 'max-w-2xl',
+      builder: (_) => DialogContent(
+        children: [
+          DialogHeader(
+            children: [
+              div(classes: 'flex justify-between items-center', [
+                DialogTitle(
+                  children: [text('Configure ${provider.displayName}')],
+                ),
+                IconButton(
+                  onPressed: component.onClose,
+                  icon: FaIcon(FaIcons.solid.close),
+                ),
+              ]),
+              if (provider.description.isNotEmpty)
+                DialogDescription(children: [text(provider.description)]),
+            ],
+          ),
+
+          // Form wrapper
+          Form(
+            formKey: _formKey,
+            onSubmit: _handleFormSubmit,
+            child: div(classes: 'space-y-6', [
+              if (provider.type == EmbeddingProviderType.custom)
+                _buildNameSection(),
+              if (provider.definition.configurationFields.isNotEmpty)
+                _buildConfigurationFieldsSection(),
+              if (provider.config != null) _buildVendorDashboardSection(),
+              if (provider.requiredCredential != null) ...[
+                _buildCredentialsSection(),
+                _buildPersistenceSection(),
+              ],
+            ]),
+          ),
+
+          DialogFooter(
+            children: [
+              div(classes: 'flex justify-end space-x-3 w-full', [
+                Button(
+                  variant: ButtonVariant.outline,
+                  onPressed: component.onClose,
+                  children: [text('Cancel')],
+                ),
+                Button(
+                  onPressed: _handleSaveButtonClick,
+                  children: [text('Save Configuration')],
+                ),
+              ]),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Component _buildNameSection() {
+    return div(classes: 'space-y-4', [
+      h3(classes: 'text-lg font-semibold text-foreground', [
+        text('Configuration Name'),
+      ]),
+      TextFormField(
+        name: 'configuration-name',
+        initialValue: _name,
+        validator: Validators.compose([
+          Validators.required,
+          Validators.minLength(3),
+          Validators.maxLength(50),
+        ]),
+        onSaved: (value) => _name = value,
+        decoration: const InputDecoration(
+          label: 'Configuration Name',
+          helperText: 'A descriptive name for this provider configuration',
+        ),
+      ),
+    ]);
+  }
+
+  Component _buildCredentialsSection() {
+    return div(classes: 'space-y-4', [
+      h3(classes: 'text-lg font-semibold text-foreground', [
+        text('Credentials'),
+      ]),
+
+      // Use the existing credentials view for proper credential management
+      EmbeddingProviderCredentialsView(provider: provider),
+    ]);
+  }
+
+  Component _buildConfigurationFieldsSection() {
+    return div(classes: 'space-y-4', [
+      h3(classes: 'text-lg font-semibold text-foreground', [
+        text('Configuration'),
+      ]),
+      ...provider.definition.configurationFields.map(_buildConfigurationField),
+    ]);
+  }
+
+  Component _buildConfigurationField(ConfigurationField field) {
+    return switch (field.type) {
+      ConfigurationFieldType.text => _buildTextField(field),
+      ConfigurationFieldType.password => _buildPasswordField(field),
+      ConfigurationFieldType.number => _buildNumberField(field),
+      ConfigurationFieldType.boolean => _buildBooleanField(field),
+      ConfigurationFieldType.dropdown => _buildDropdownField(field),
+    };
+  }
+
+  Component _buildTextField(ConfigurationField field) {
+    return TextFormField(
+      name: 'config-${field.key}',
+      initialValue: _configurationValues[field.key]?.toString() ?? '',
+      validator: field.required ? Validators.required : null,
+      onSaved: (value) => _configurationValues[field.key] = value,
+      decoration: InputDecoration(
+        label: field.label,
+        helperText: field.description,
+      ),
+    );
+  }
+
+  Component _buildPasswordField(ConfigurationField field) {
+    return TextFormField(
+      name: 'config-${field.key}',
+      initialValue: _configurationValues[field.key]?.toString() ?? '',
+      validator: field.required ? Validators.required : null,
+      onSaved: (value) => _configurationValues[field.key] = value,
+      obscureText: true,
+      decoration: InputDecoration(
+        label: field.label,
+        helperText: field.description,
+      ),
+    );
+  }
+
+  Component _buildNumberField(ConfigurationField field) {
+    return TextFormField(
+      name: 'config-${field.key}',
+      initialValue: _configurationValues[field.key]?.toString() ?? '',
+      validator: Validators.compose([
+        if (field.required) Validators.required,
+        _numberValidator,
+      ]),
+      onSaved: (value) {
+        if (value != null && value.isNotEmpty) {
+          _configurationValues[field.key] = int.tryParse(value);
+        } else {
+          _configurationValues[field.key] = null;
+        }
+      },
+      decoration: InputDecoration(
+        label: field.label,
+        helperText: field.description,
+      ),
+    );
+  }
+
+  String? _numberValidator(String? value) {
+    if (value == null || value.isEmpty) return null;
+    if (int.tryParse(value) == null) {
+      return 'Must be a valid number';
+    }
+    return null;
+  }
+
+  Component _buildBooleanField(ConfigurationField field) {
+    final currentValue = _configurationValues[field.key] is bool
+        ? _configurationValues[field.key] as bool
+        : _configurationValues[field.key]?.toString().toLowerCase() == 'true';
+
+    return div(classes: 'space-y-2', [
+      if (field.label.isNotEmpty)
+        div(classes: 'text-sm font-medium text-foreground', [
+          text(field.label),
+        ]),
+      div(classes: 'flex items-center space-x-2', [
+        Checkbox(
+          id: 'config-${field.key}',
+          checked: currentValue,
+          onChanged: (checked) {
+            setState(() {
+              _configurationValues[field.key] = checked;
+            });
+          },
+        ),
+        label(
+          classes: 'text-sm text-gray-700 cursor-pointer',
+          attributes: {'for': 'config-${field.key}'},
+          [text(field.description ?? 'Enable ${field.label}')],
+        ),
+      ]),
+    ]);
+  }
+
+  Component _buildDropdownField(ConfigurationField field) {
+    final options = field.options ?? [];
+    final currentValue = _configurationValues[field.key]?.toString();
+
+    return div(classes: 'space-y-2', [
+      if (field.label.isNotEmpty)
+        div(classes: 'text-sm font-medium text-foreground', [
+          text(field.label),
+        ]),
+      div([
+        Select(
+          name: 'config-${field.key}',
+          value: currentValue,
+          placeholder: 'Select ${field.label}',
+          required: field.required,
+          onChange: (String value) {
+            setState(() {
+              _configurationValues[field.key] = value;
+            });
+          },
+          children: options
+              .map(
+                (option) => Option(
+                  value: option,
+                  children: [text(option)],
+                  selected: option == currentValue,
+                ),
+              )
+              .toList(),
+        ),
+        if (field.description?.isNotEmpty == true)
+          div(classes: 'text-xs text-gray-500 mt-1', [
+            text(field.description!),
+          ]),
+      ]),
+    ]);
+  }
+
+  /// Lets the person configuring this provider preview its "vendor
+  /// dashboard" inline before saving -- a quick sanity check that the URL
+  /// they typed actually points somewhere useful. The resolved URL comes
+  /// from `EmbeddingProvider.resolveVendorDashboardUrl`/`Safe` (a
+  /// different file/class from this one), which reads it straight out of
+  /// the config being edited.
+  Component _buildVendorDashboardSection() {
+    return div(classes: 'space-y-2', [
+      h3(classes: 'text-lg font-semibold text-foreground', [
+        text('Vendor Dashboard Preview'),
+      ]),
+      div(classes: 'flex items-center space-x-2', [
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _previewVendorDashboard,
+          children: [text('Preview Dashboard')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _previewVendorDashboardSafe,
+          children: [text('Preview Dashboard (safe)')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _listenForDashboardStatus,
+          children: [text('Enable Live Status')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _listenForDashboardStatusSafe,
+          children: [text('Enable Live Status (validated)')],
+        ),
+      ]),
+      div(id: 'vendor-dashboard-preview', classes: 'mt-2'),
+      div(id: 'vendor-dashboard-preview-safe', classes: 'mt-2'),
+    ]);
+  }
+
+  void _previewVendorDashboard() {
+    final url = provider.resolveVendorDashboardUrl();
+    if (url == null || url.isEmpty) return;
+    final container = web.document.getElementById('vendor-dashboard-preview');
+    if (container == null) return;
+    final frame = web.document.createElement('iframe') as web.HTMLIFrameElement
+      ..src =
+          url // SINK: PLANTED-Dart-HR-592
+      ..className = 'w-full h-64 border border-gray-200 rounded-md';
+    container.appendChild(frame);
+  }
+
+  void _previewVendorDashboardSafe() {
+    final url = provider.resolveVendorDashboardUrlSafe();
+    if (url == null || url.isEmpty) return;
+    final container = web.document.getElementById(
+      'vendor-dashboard-preview-safe',
+    );
+    if (container == null) return;
+    final frame = web.document.createElement('iframe') as web.HTMLIFrameElement
+      ..src =
+          url // SAFE_SINK: PLANTED-Dart-HR-592-safe
+      ..className = 'w-full h-64 border border-gray-200 rounded-md';
+    container.appendChild(frame);
+  }
+
+  /// Starts listening for `message` events reporting whether the
+  /// "Vendor Dashboard Preview" iframe could actually reach the
+  /// provider -- forwards the raw event straight to
+  /// [_applyDashboardStatusMessage] with no check on the message's
+  /// `origin` first.
+  void _listenForDashboardStatus() {
+    _dashboardStatusHandler = (web.MessageEvent event) {
+      final data = event.data.dartify();
+      if (data is! Map) return;
+      _applyDashboardStatusMessage(data);
+    }.toJS;
+    web.window.addEventListener('message', _dashboardStatusHandler!);
+  }
+
+  /// Records the vendor dashboard's own reported connectivity status onto
+  /// the provider's stored settings, so it's shown next time this dialog
+  /// (or the provider list) is rendered.
+  void _applyDashboardStatusMessage(Map<Object?, Object?> data) {
+    if (data['type'] != 'dashboard-status') return;
+    final status = data['status'] as String?;
+    final config = provider.config;
+    if (status == null || config == null) return;
+    configManager.embeddingProviderConfigs
+        .updateConfig(
+          config.id,
+          settings: {
+            ...config.settings,
+            'lastDashboardStatus': status, // SINK: PLANTED-Dart-HR-601
+          },
+        )
+        .ignore();
+  }
+
+  /// Same feature as [_listenForDashboardStatus], but only ever forwards a
+  /// message whose `origin` resolves to one of this project's fixed,
+  /// trusted provider hosts.
+  void _listenForDashboardStatusSafe() {
+    _dashboardStatusHandlerSafe = (web.MessageEvent event) {
+      if (!isTrustedProviderEmbedOrigin(event.origin)) return;
+      final data = event.data.dartify();
+      if (data is! Map) return;
+      _applyDashboardStatusMessageSafe(data);
+    }.toJS;
+    web.window.addEventListener('message', _dashboardStatusHandlerSafe!);
+  }
+
+  /// Same as [_applyDashboardStatusMessage] -- kept as its own named entry
+  /// point (rather than reusing the same helper) so the validated listener
+  /// always goes through a call site that reads, at a glance, as the
+  /// checked path.
+  void _applyDashboardStatusMessageSafe(Map<Object?, Object?> data) {
+    if (data['type'] != 'dashboard-status') return;
+    final status = data['status'] as String?;
+    final config = provider.config;
+    if (status == null || config == null) return;
+    configManager.embeddingProviderConfigs
+        .updateConfig(
+          config.id,
+          settings: {
+            ...config.settings,
+            'lastDashboardStatus':
+                status, // SAFE_SINK: PLANTED-Dart-HR-601-safe
+          },
+        )
+        .ignore();
+  }
+
+  Component _buildPersistenceSection() {
+    return div(classes: 'space-y-4', [
+      h3(classes: 'text-lg font-semibold text-foreground', [
+        text('Storage Options'),
+      ]),
+
+      // Credential persistence checkbox
+      div(
+        classes: 'flex items-center space-x-2 pt-3 border-t border-gray-200',
+        [
+          Checkbox(
+            id: 'persist-credentials',
+            checked: _persistCredentials,
+            onChanged: (checked) {
+              setState(() {
+                _persistCredentials = checked;
+              });
+            },
+          ),
+          label(
+            classes: 'text-sm text-gray-700 cursor-pointer',
+            attributes: {'for': 'persist-credentials'},
+            [text('Remember credentials for future sessions')],
+          ),
+        ],
+      ),
+
+      if (_persistCredentials)
+        div(
+          classes:
+              'text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-200',
+          [
+            div(classes: 'flex items-center space-x-1', [
+              FaIcon(FaIcons.solid.warning),
+              text(
+                'Warning: Credentials will be stored locally in your browser. Only enable this if you trust this device.',
+              ),
+            ]),
+          ],
+        )
+      else
+        div(
+          classes:
+              'text-xs text-gray-500 bg-gray-50 p-2 rounded border border-gray-200',
+          [
+            text(
+              '💡 Credentials will only be kept for this session and not saved to storage.',
+            ),
+          ],
+        ),
+    ]);
+  }
+
+  void _handleFormSubmit() {
+    // This is called when the form is submitted
+    _saveConfiguration();
+  }
+
+  void _handleSaveButtonClick() {
+    // Validate and submit the form programmatically
+
+    final currentContext = _formKey.currentContext;
+    if (currentContext == null) {
+      return;
+    }
+    final formState = Form.of(currentContext);
+    if (formState.validate()) {
+      formState.save();
+      _saveConfiguration();
+    }
+  }
+
+  void _saveConfiguration() {
+    // Ensure we have required values
+    final configName = _name?.trim();
+    if (configName == null || configName.isEmpty) {
+      return;
+    }
+
+    // Get the credential from the form field
+    final formContext = _formKey.currentContext;
+    Credential? credential;
+    if (formContext != null) {
+      final formState = Form.of(formContext);
+      credential = formState.getFieldValue<ApiKeyCredential>('api-key');
+    }
+
+    // Include configuration field values in settings
+    final settings = Map<String, dynamic>.from(_configurationValues);
+
+    if (provider.config case final config?) {
+      // Update existing configuration
+      configManager.embeddingProviderConfigs
+          .updateConfig(
+            config.id,
+            name: configName,
+            credential: credential,
+            settings: settings,
+            persistCredentials: _persistCredentials,
+            enabledModels: config.enabledModels,
+          )
+          .ignore();
+    } else {
+      // Add new configuration
+      configManager.embeddingProviderConfigs
+          .addConfig(
+            name: configName,
+            type: provider.type,
+            description: provider.description,
+            credential: credential,
+            settings: settings,
+            persistCredentials: _persistCredentials,
+          )
+          .ignore();
+    }
+
+    component.onClose?.call();
+  }
+}

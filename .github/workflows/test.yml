@@ -1,0 +1,44 @@
+name: Run Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install JS dependencies
+        run: |
+          pnpm install
+          pnpm run build:dev
+
+      - name: Get Dart dependencies
+        run: dart pub get
+
+      - name: Build generated code
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Run tests
+        run: dart test --fail-fast

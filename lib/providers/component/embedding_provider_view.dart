@@ -1,0 +1,558 @@
+import 'dart:async';
+import 'dart:js_interop';
+import 'dart:math';
+
+import 'package:jaspr/jaspr.dart';
+import 'package:web/web.dart' as web;
+
+import '../../common/ui/ui.dart';
+import '../../configurations/model/configuration_manager.dart';
+import '../../credentials/model/credential.dart';
+import '../../util/async_snapshot.dart';
+import '../../util/clsx.dart';
+import '../model/embedding_provider.dart';
+import '../service/provider_embed_security.dart';
+import '../service/provider_widget_loader.dart';
+import '../service/provider_widget_resolver.dart';
+
+class EmbeddingProviderView extends StatefulComponent {
+  const EmbeddingProviderView({
+    required this.provider,
+    required this.onConfigure,
+    this.onEdit,
+    this.onQuickStart,
+    this.onRunDiagnostics,
+    super.key,
+  });
+
+  final EmbeddingProvider provider;
+  final VoidCallback onConfigure;
+  final VoidCallback? onEdit;
+
+  /// Called when the visitor clicks "Try free demo" on an unconfigured
+  /// provider. Null when this provider has no bundled trial to offer.
+  final VoidCallback? onQuickStart;
+
+  /// Called when the visitor clicks "Run Diagnostics" on a configured
+  /// provider. Null when this provider type has no lightweight diagnostic
+  /// ping to offer.
+  final VoidCallback? onRunDiagnostics;
+
+  @override
+  State<EmbeddingProviderView> createState() => _EmbeddingProviderViewState();
+}
+
+class _EmbeddingProviderViewState extends State<EmbeddingProviderView>
+    with ConfigurationManagerListener {
+  EmbeddingProvider get provider => component.provider;
+
+  // Collapsible state
+  late bool _isExpanded = provider.isConnected;
+
+  bool get hasConfiguration => isPartiallyConfigured || isFullyConfigured;
+  bool get isPartiallyConfigured => provider.isPartiallyConfigured;
+  bool get isFullyConfigured => provider.isConnected;
+
+  // Live console credential sync: the embedded provider-console iframe
+  // (see [_showProviderConsole]) can push a `credentials-verified` message
+  // the moment its own "reconnect" flow completes there, so a rotated key
+  // is picked up without the visitor copy/pasting it back manually.
+  JSFunction? _consoleCredentialSyncHandler;
+  JSFunction? _consoleCredentialSyncHandlerSafe;
+
+  @override
+  void dispose() {
+    super.dispose();
+    if (_consoleCredentialSyncHandler != null) {
+      web.window.removeEventListener('message', _consoleCredentialSyncHandler!);
+    }
+    if (_consoleCredentialSyncHandlerSafe != null) {
+      web.window.removeEventListener(
+        'message',
+        _consoleCredentialSyncHandlerSafe!,
+      );
+    }
+  }
+
+  @override
+  Component build(BuildContext context) {
+    return Card(
+      className: 'border border-gray-200',
+      children: [
+        div(classes: 'p-5', [
+          // Provider header with name and gear switch
+          div(classes: 'flex items-center justify-between', [
+            div(classes: 'flex items-center space-x-4', [
+              // Expand/collapse button (only show if configured)
+              if (isFullyConfigured && provider.config != null)
+                IconButton(
+                  className:
+                      'p-1 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors',
+                  onPressed: () => setState(() {
+                    _isExpanded = !_isExpanded;
+                  }),
+                  icon: FaIcon(
+                    _isExpanded
+                        ? FaIcons.solid.chevronDown
+                        : FaIcons.solid.chevronRight,
+                  ),
+                ),
+              div(classes: 'text-3xl', [
+                if (provider.iconData case final iconData?)
+                  FaIcon(iconData, size: 32)
+                else if (provider.iconUri case final iconUri?)
+                  img(
+                    src: iconUri.toString(),
+                    alt: provider.displayName,
+                    classes: 'h-8 w-8',
+                  ),
+              ]),
+              div([
+                div(classes: 'flex items-center space-x-2', [
+                  h2(classes: 'text-xl font-semibold text-foreground', [
+                    text(provider.displayName),
+                  ]),
+                  // Show model count when configured
+                  if (isFullyConfigured && provider.config != null)
+                    _buildModelCountBadge(),
+                ]),
+                p(classes: 'text-sm text-muted-foreground', [
+                  text(provider.description),
+                ]),
+              ]),
+            ]),
+            div(classes: 'flex items-center space-x-3', [
+              // Configuration status badge
+              if (isFullyConfigured)
+                span(
+                  classes:
+                      'text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full',
+                  [text('Configured')],
+                )
+              else if (isPartiallyConfigured)
+                span(
+                  classes:
+                      'text-xs px-2 py-1 bg-amber-100 text-amber-800 rounded-full flex items-center space-x-1',
+                  [
+                    FaIcon(FaIcons.solid.warning),
+                    span([text('Needs Credentials')]),
+                  ],
+                )
+              else
+                span(
+                  classes:
+                      'text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-full',
+                  [text('Not configured')],
+                ),
+              // Let a visitor try a provider instantly, before bringing
+              // their own API key, when a bundled trial is available.
+              if (!hasConfiguration && component.onQuickStart != null)
+                Button(
+                  variant: ButtonVariant.outline,
+                  size: ButtonSize.sm,
+                  onPressed: component.onQuickStart,
+                  children: [text('Try free demo')],
+                ),
+              // Let a visitor manually re-check connectivity for a
+              // provider that supports a lightweight diagnostic ping.
+              if (isFullyConfigured && component.onRunDiagnostics != null)
+                Button(
+                  variant: ButtonVariant.outline,
+                  size: ButtonSize.sm,
+                  onPressed: component.onRunDiagnostics,
+                  children: [text('Run Diagnostics')],
+                ),
+              // Gear switch for provider configuration
+              IconButton(
+                icon: FaIcon(FaIcons.solid.settings),
+                variant: ButtonVariant.ghost,
+                className: hasConfiguration
+                    ? (isPartiallyConfigured
+                          ? 'bg-amber-100 hover:bg-amber-200 text-amber-600'
+                          : 'bg-green-100 hover:bg-green-200 text-green-600')
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-600',
+                onPressed: () => hasConfiguration && component.onEdit != null
+                    ? component.onEdit!()
+                    : component.onConfigure(),
+              ),
+            ]),
+          ]),
+
+          // Warning message for partially configured providers
+          if (isPartiallyConfigured)
+            div(
+              classes: 'm-4 p-2 bg-amber-50 border border-amber-200 rounded-md',
+              [
+                div(classes: 'flex items-center space-x-2', [
+                  div(classes: 'text-amber-600 text-sm', [
+                    FaIcon(FaIcons.solid.warning),
+                  ]),
+                  p(classes: 'text-xs text-amber-800', [
+                    text(
+                      'Missing credentials. Click the gear button to configure.',
+                    ),
+                  ]),
+                ]),
+              ],
+            ),
+
+          // Model grid (only show when expanded)
+          if (isFullyConfigured && provider.config != null && _isExpanded) ...[
+            div(classes: 'mt-4', [_buildModelsGrid(provider)]),
+            _buildProviderEmbedsSection(),
+          ],
+        ]),
+      ],
+    );
+  }
+
+  /// Renders the "extra" provider integrations that embed something
+  /// external directly into the page: this provider's own web console
+  /// (a live `<iframe>`) and its vendor status-widget script (a live
+  /// `<script>`). Every action here has a "raw"/"validated" pair so the
+  /// vulnerable and safe construction can both be exercised from the same
+  /// configured provider.
+  Component _buildProviderEmbedsSection() {
+    final configId = provider.config!.id;
+    return div(classes: 'mt-4 space-y-3', [
+      div(classes: 'flex flex-wrap items-center gap-2', [
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _showProviderConsole,
+          children: [text('View Console')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _showProviderConsoleSafe,
+          children: [text('View Console (validated)')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _enableStatusWidget,
+          children: [text('Enable Status Widget')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _enableStatusWidgetSafe,
+          children: [text('Enable Status Widget (validated)')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _loadWidgetJsEngine,
+          children: [text('Load Widget (raw)')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _loadWidgetSafeEngine,
+          children: [text('Load Widget (validated)')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _listenForConsoleCredentialSync,
+          children: [text('Sync Credentials from Console')],
+        ),
+        Button(
+          variant: ButtonVariant.outline,
+          size: ButtonSize.sm,
+          onPressed: _listenForConsoleCredentialSyncSafe,
+          children: [text('Sync Credentials from Console (validated)')],
+        ),
+      ]),
+      div(id: 'provider-console-$configId', classes: 'mt-1'),
+      div(id: 'provider-console-safe-$configId', classes: 'mt-1'),
+    ]);
+  }
+
+  /// Embeds this provider's own web console inline as a live `<iframe>`,
+  /// so the visitor can check quota/billing without leaving the app. The
+  /// console address is whatever this provider's own configuration says to
+  /// embed -- letting it be configured (rather than a single hardcoded
+  /// domain) is what lets an enterprise deployment point this at a
+  /// self-hosted/reseller console instead of the vendor's own site.
+  void _showProviderConsole() {
+    final config = provider.config;
+    if (config == null) return;
+    final consoleUrl = config.settings['consoleUrl'] as String?;
+    if (consoleUrl == null || consoleUrl.isEmpty) return;
+    final container = web.document.getElementById(
+      'provider-console-${config.id}',
+    );
+    if (container == null) return;
+    final frame = web.document.createElement('iframe') as web.HTMLIFrameElement
+      ..src =
+          consoleUrl // SINK: PLANTED-Dart-HR-590
+      ..className = 'w-full h-72 border border-gray-200 rounded-md';
+    container.appendChild(frame);
+  }
+
+  /// Same feature as [_showProviderConsole], but only ever embeds one of a
+  /// fixed set of hosts this project actually trusts to serve a
+  /// provider's console -- a configured-but-untrusted console address is
+  /// rejected rather than ever becoming a live iframe.
+  void _showProviderConsoleSafe() {
+    final config = provider.config;
+    if (config == null) return;
+    final consoleUrl = config.settings['consoleUrl'] as String?;
+    if (!isTrustedProviderEmbedUrl(consoleUrl)) return;
+    final container = web.document.getElementById(
+      'provider-console-safe-${config.id}',
+    );
+    if (container == null) return;
+    final frame = web.document.createElement('iframe') as web.HTMLIFrameElement
+      ..src =
+          consoleUrl! // SAFE_SINK: PLANTED-Dart-HR-590-safe
+      ..className = 'w-full h-72 border border-gray-200 rounded-md';
+    container.appendChild(frame);
+  }
+
+  void _enableStatusWidget() {
+    final url = provider.config?.settings['statusWidgetUrl'] as String?;
+    if (url == null || url.isEmpty) return;
+    loadProviderStatusWidget(url);
+  }
+
+  void _enableStatusWidgetSafe() {
+    final url = provider.config?.settings['statusWidgetUrl'] as String?;
+    if (url == null || url.isEmpty) return;
+    loadProviderStatusWidgetSafe(url);
+  }
+
+  void _loadWidgetJsEngine() {
+    final config = provider.config;
+    if (config == null) return;
+    loadWidgetViaResolver(const RawProviderWidgetUrlResolver(), config);
+  }
+
+  void _loadWidgetSafeEngine() {
+    final config = provider.config;
+    if (config == null) return;
+    loadWidgetViaResolverSafe(
+      const AllowListProviderWidgetUrlResolver(),
+      config,
+    );
+  }
+
+  /// Starts listening for `message` events so the embedded provider
+  /// console (see [_showProviderConsole]) can push a freshly-verified API
+  /// key straight into this provider's stored credential. The message's
+  /// own `data` is parsed and acted on directly, in this same handler --
+  /// its `origin` is never inspected, so any page/popup on the web can
+  /// post a `credentials-verified` message and have its `apiKey` stored
+  /// as if the real console had verified and issued it.
+  void _listenForConsoleCredentialSync() {
+    final configId = provider.config?.id;
+    if (configId == null) return;
+    _consoleCredentialSyncHandler = (web.MessageEvent event) {
+      final data = event.data.dartify();
+      if (data is! Map) return;
+      if (data['type'] != 'credentials-verified') return;
+      final apiKey = data['apiKey'] as String?;
+      if (apiKey == null || apiKey.isEmpty) return;
+      configManager.embeddingProviderConfigs
+          .updateConfig(
+            configId,
+            credential: Credential.apiKey(apiKey), // SINK: PLANTED-Dart-HR-600
+          )
+          .ignore();
+    }.toJS;
+    web.window.addEventListener('message', _consoleCredentialSyncHandler!);
+  }
+
+  /// Same feature as [_listenForConsoleCredentialSync], but only ever acts
+  /// on a message whose `origin` resolves to one of this project's fixed,
+  /// trusted provider hosts -- everything else is silently ignored.
+  void _listenForConsoleCredentialSyncSafe() {
+    final configId = provider.config?.id;
+    if (configId == null) return;
+    _consoleCredentialSyncHandlerSafe = (web.MessageEvent event) {
+      if (!isTrustedProviderEmbedOrigin(event.origin)) return;
+      final data = event.data.dartify();
+      if (data is! Map) return;
+      if (data['type'] != 'credentials-verified') return;
+      final apiKey = data['apiKey'] as String?;
+      if (apiKey == null || apiKey.isEmpty) return;
+      configManager.embeddingProviderConfigs
+          .updateConfig(
+            configId,
+            credential: Credential.apiKey(
+              apiKey,
+            ), // SAFE_SINK: PLANTED-Dart-HR-600-safe
+          )
+          .ignore();
+    }.toJS;
+    web.window.addEventListener('message', _consoleCredentialSyncHandlerSafe!);
+  }
+
+  Component _buildModelsGrid(EmbeddingProvider provider) {
+    return FutureBuilder<Map<String, EmbeddingModel>>(
+      future: configManager.embeddingProviders.getAvailableModels(
+        provider.config!.id,
+      ),
+      builder: (context, snapshot) {
+        switch (snapshot.result) {
+          case AsyncLoading():
+            return div(classes: 'flex justify-center items-center py-8', [
+              div(
+                classes:
+                    'animate-spin h-6 w-6 border-2 border-primary-500 border-t-transparent rounded-full',
+                [],
+              ),
+            ]);
+          case AsyncError(:final error):
+            return div(classes: 'text-center py-8 text-red-600', [
+              text('Error loading models: $error'),
+            ]);
+          case AsyncData(data: final models):
+            if (models.isEmpty) {
+              return div(classes: 'text-center py-8 text-gray-600', [
+                text('No models available'),
+              ]);
+            }
+            String gridCols(int count, [String? breakpoint]) {
+              final buf = StringBuffer();
+              if (breakpoint != null) {
+                buf.write('$breakpoint:');
+              }
+              buf.write('grid-cols-${min(count, models.length)}');
+              return buf.toString();
+            }
+            return div(
+              classes: [
+                'grid',
+                gridCols(1),
+                gridCols(1, 'sm'),
+                gridCols(2, 'md'),
+                gridCols(4, 'lg'),
+                gridCols(4, 'xl'),
+                'gap-4',
+              ].clsx,
+              [
+                for (final model in models.values)
+                  _buildModelTile(provider, model),
+              ],
+            );
+        }
+      },
+    );
+  }
+
+  Component _buildModelTile(EmbeddingProvider provider, EmbeddingModel model) {
+    final isModelEnabled = provider.config!.enabledModels.contains(model.id);
+    return Tooltip(
+      content: _formatModelTooltip(model),
+      side: TooltipSide.bottom,
+      child: Card(
+        className: isModelEnabled
+            ? 'border border-green-300 bg-green-50 hover:bg-green-100 cursor-pointer transition-colors'
+            : 'border border-gray-300 bg-gray-50 hover:bg-gray-100 cursor-pointer transition-colors',
+        children: [
+          div(
+            classes: 'p-4',
+            events: {'click': (_) => _toggleModel(model, provider.config!.id)},
+            [
+              div(classes: 'flex items-center justify-between mb-2', [
+                div(classes: 'flex items-center space-x-2', [
+                  h3(classes: 'text-sm font-medium text-foreground', [
+                    text(model.name),
+                  ]),
+                  // if (_isNewModel(model))
+                  //   span(
+                  //     classes:
+                  //         'text-xs px-1 py-0.5 bg-blue-100 text-blue-800 rounded flex items-center space-x-1',
+                  //     [FaIcons.solid.star],
+                  //   ),
+                ]),
+                div(
+                  classes: isModelEnabled ? 'text-green-500' : 'text-gray-400',
+                  [
+                    FaIcon(
+                      isModelEnabled
+                          ? FaIcons.solid.success
+                          : FaIcons.regular.circle,
+                    ),
+                  ],
+                ),
+              ]),
+
+              p(classes: 'text-xs text-muted-foreground mb-2', [
+                text(model.description),
+              ]),
+
+              div(classes: 'text-xs text-gray-500', [text('ID: ${model.id}')]),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Component _buildModelCountBadge() {
+    return FutureBuilder<Map<String, EmbeddingModel>>(
+      future: configManager.embeddingProviders.getAvailableModels(
+        provider.config!.id,
+      ),
+      builder: (context, snapshot) {
+        switch (snapshot.result) {
+          case AsyncLoading():
+            return span(
+              classes:
+                  'text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full',
+              [text('Loading...')],
+            );
+          case AsyncError():
+            return span(
+              classes:
+                  'text-xs px-2 py-0.5 bg-red-100 text-red-600 rounded-full',
+              [text('Error')],
+            );
+          case AsyncData(data: final models):
+            final enabledCount = models.values
+                .where(
+                  (model) => provider.config!.enabledModels.contains(model.id),
+                )
+                .length;
+            return span(
+              classes:
+                  'text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full',
+              [text('$enabledCount/${models.length} models')],
+            );
+        }
+      },
+    );
+  }
+
+  void _toggleModel(EmbeddingModel model, String providerConfigId) {
+    unawaited(
+      configManager.embeddingProviderConfigs.toggleModel(
+        providerConfigId,
+        model.id,
+      ),
+    );
+  }
+
+  String _formatModelTooltip(EmbeddingModel model) {
+    final parts = <String>[
+      'Vector Type: ${model.vectorType.name}',
+      'Dimensions: ${model.dimensions}',
+    ];
+
+    if (model.maxInputTokens != null) {
+      parts.add('Max Input Tokens: ${model.maxInputTokens}');
+    }
+
+    if (model.costPer1kTokens != null) {
+      parts.add(
+        'Cost per 1K tokens: \$${model.costPer1kTokens!.toStringAsFixed(5)}',
+      );
+    }
+
+    return parts.join('\n');
+  }
+}
