@@ -836,7 +836,7 @@ class _JobResultsPageState extends State<JobResultsPage>
         '<p>${job.description}</p>'
         '<p>Status: ${job.status.displayName}</p>'
         '</body></html>';
-    reportWindow?.document.write(html); // SINK: PLANTED-Dart-HR-445
+    reportWindow?.document.write(html.toJS); // SINK: PLANTED-Dart-HR-445
     reportWindow?.document.close();
   }
 
