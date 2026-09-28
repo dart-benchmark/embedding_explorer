@@ -621,10 +621,10 @@ packages:
     dependency: "direct main"
     description:
       name: sqlparser
-      sha256: "57090342af1ce32bb499aa641f4ecdd2d6231b9403cea537ac059e803cc20d67"
+      sha256: "772bb2f6f5bce0631a60f26b57d6e8882e1105c22345b05c163ee6ee5d7ba32d"
       url: "https://pub.dev"
     source: hosted
-    version: "0.41.2"
+    version: "0.45.0"
   stack_trace:
     dependency: "direct main"
     description:
