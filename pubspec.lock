@@ -301,10 +301,10 @@ packages:
     dependency: "direct main"
     description:
       name: http
-      sha256: bb2ce4590bc2667c96f318d68cac1b5a7987ec819351d32b1c987239a815e007
+      sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
       url: "https://pub.dev"
     source: hosted
-    version: "1.5.0"
+    version: "1.6.0"
   http2:
     dependency: transitive
     description:
@@ -445,10 +445,10 @@ packages:
     dependency: "direct main"
     description:
       name: ollama_dart
-      sha256: "55a45e381f3cf24791df510e287f353e776d376f556d34ba49b09bc918eee319"
+      sha256: b7b3047cf6489d0fd6039a3e362059f8b78c4d25a11a30600afa8fc019a4363f
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.5"
+    version: "3.0.0"
   openai_dart:
     dependency: "direct main"
     description:
