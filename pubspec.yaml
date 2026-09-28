@@ -30,7 +30,7 @@ dependencies:
   sqlite3: ^2.9.0
   sqlparser: ^0.41.2
   stack_trace: ^1.12.1
-  stream_transform: ^2.1.1
+  stream_transform: ^2.1.2
   timing: ^1.0.2
   web: ^1.1.1
   worker_bee:
