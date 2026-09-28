@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async'; import 'dart:js_interop';
 
 import 'package:web/web.dart' as web;
 
@@ -46,7 +46,7 @@ void routeProviderConsoleMessage(
   web.MessageEvent event,
 ) {
   if (!policy.isTrusted(event.origin)) return;
-  final data = event.data.dartify();
+  final data = event.data?.dartify();
   if (data is! Map) return;
   if (data['type'] != 'settings-resync') return;
   final configId = data['configId'] as String?;
@@ -73,7 +73,7 @@ void routeProviderConsoleMessageSafe(
   web.MessageEvent event,
 ) {
   if (!policy.isTrusted(event.origin)) return;
-  final data = event.data.dartify();
+  final data = event.data?.dartify();
   if (data is! Map) return;
   if (data['type'] != 'settings-resync') return;
   final configId = data['configId'] as String?;

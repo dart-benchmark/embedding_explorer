@@ -362,8 +362,8 @@ class _EmbeddingProviderConfigDialogState
           children: [text('Enable Live Status (validated)')],
         ),
       ]),
-      div(id: 'vendor-dashboard-preview', classes: 'mt-2'),
-      div(id: 'vendor-dashboard-preview-safe', classes: 'mt-2'),
+      div(id: 'vendor-dashboard-preview', classes: 'mt-2', []),
+      div(id: 'vendor-dashboard-preview-safe', classes: 'mt-2', []),
     ]);
   }
 

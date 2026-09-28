@@ -452,8 +452,8 @@ abstract class DatabasePoolWorker
                 await ensureCapacity();
 
                 // Create database using SAH Pool VFS
-                openDatabases[filename] = Database(
-                  sahPool.openDatabase(filename),
+                openDatabases[filename!] = Database(
+                  sahPool.openDatabase(filename!),
                 );
               } else {
                 logger.fine('Database already open: $filename');

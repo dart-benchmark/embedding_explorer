@@ -65,7 +65,7 @@ final class _CreateEditDialogState extends State<CreateEditTemplateDialog>
   void _previewComputedIdWithJsEngine() {
     final idTemplate = model.idEditor.value.value;
     final row = model.sampleRow;
-    final match = _computedField.firstMatch(idTemplate);
+    final match = _computedField.firstMatch(idTemplate.rawTemplate);
     if (match == null || row == null) return;
     setState(() {
       _computedIdPreview = resolveAndEvaluateComputedId(
@@ -82,7 +82,7 @@ final class _CreateEditDialogState extends State<CreateEditTemplateDialog>
   void _previewComputedIdWithSafeEngine() {
     final idTemplate = model.idEditor.value.value;
     final row = model.sampleRow;
-    final match = _computedField.firstMatch(idTemplate);
+    final match = _computedField.firstMatch(idTemplate.rawTemplate);
     if (match == null || row == null) return;
     setState(() {
       _computedIdPreview = resolveAndEvaluateComputedIdSafe(

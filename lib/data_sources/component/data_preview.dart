@@ -239,7 +239,7 @@ class _DataPreviewState extends State<DataPreview> {
   void _showQuickInfo() {
     final infoWindow = web.window.open('', '_blank', 'width=400,height=200');
     infoWindow?.document.write(
-      component.dataSource.buildQuickInfoHtml(),
+      component.dataSource.buildQuickInfoHtml().toJS,
     ); // SINK: PLANTED-Dart-HR-449
     infoWindow?.document.close();
   }

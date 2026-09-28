@@ -265,8 +265,8 @@ class _EmbeddingProviderViewState extends State<EmbeddingProviderView>
           children: [text('Sync Credentials from Console (validated)')],
         ),
       ]),
-      div(id: 'provider-console-$configId', classes: 'mt-1'),
-      div(id: 'provider-console-safe-$configId', classes: 'mt-1'),
+      div(id: 'provider-console-$configId', classes: 'mt-1', []),
+      div(id: 'provider-console-safe-$configId', classes: 'mt-1', []),
     ]);
   }
 

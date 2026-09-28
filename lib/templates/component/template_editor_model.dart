@@ -172,7 +172,7 @@ final class TemplateEditorModel extends ChangeNotifierX
     if (template.isEmpty) {
       return 'Computed field preview will appear here once you define a {{=expr}} field...';
     }
-    return Template(template).renderComputed(_sampleRow);
+    return Template(template.rawTemplate).renderComputed(_sampleRow);
   }
 
   void updateName(String newName) {
